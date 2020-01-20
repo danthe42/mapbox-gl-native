@@ -119,6 +119,8 @@ public:
     std::array<float, 2> variableTextOffset;
     bool singleLine;
     uint32_t crossTileID = 0;
+
+    static const uint32_t kInvalidCrossTileID = std::numeric_limits<uint32_t>::max();
 };
 
 } // namespace mbgl
