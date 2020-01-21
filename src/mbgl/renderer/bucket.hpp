@@ -57,7 +57,7 @@ public:
     // on success call; `0` otherwise. The second element is `true` if
     // the bucket was originally registered; `false` otherwise.
     virtual std::pair<uint32_t, bool> registerAtCrossTileIndex(CrossTileSymbolLayerIndex&,
-                                                               const OverscaledTileID&,
+                                                               const RenderTile&,
                                                                const TransformState&) {
         return std::make_pair(0u, false);
     }

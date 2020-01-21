@@ -157,9 +157,8 @@ void Placement::placeBucket(const SymbolBucket& bucket,
     const bool rotateIconWithMap = layout.get<style::IconRotationAlignment>() == style::AlignmentType::Map;
     const bool pitchIconWithMap = layout.get<style::IconPitchAlignment>() == style::AlignmentType::Map;
 
-    mat4 posMatrix;
+    mat4 posMatrix = renderTile.matrix;
     const auto& projMatrix = state.getProjectionMatrix();
-    state.matrixFor(posMatrix, renderTile.id);
     matrix::multiply(posMatrix, projMatrix, posMatrix);
 
     mat4 textLabelPlaneMatrix =

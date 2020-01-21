@@ -19,6 +19,7 @@ class SymbolInstance;
 class RenderLayer;
 class SymbolBucket;
 class TransformState;
+class RenderTile;
 
 class IndexedSymbolInstance {
 public:
@@ -49,7 +50,7 @@ public:
 class CrossTileSymbolLayerIndex {
 public:
     CrossTileSymbolLayerIndex(uint32_t& maxCrossTileID);
-    bool addBucket(const OverscaledTileID&, SymbolBucket&, const TransformState& transformState);
+    bool addBucket(const RenderTile& renderTile, SymbolBucket&, const TransformState& transformState);
     bool removeStaleBuckets(const std::unordered_set<uint32_t>& currentIDs);
     void handleWrapJump(float newLng);
 private:

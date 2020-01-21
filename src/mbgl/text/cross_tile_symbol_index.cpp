@@ -101,22 +101,20 @@ bool isInVewport(const mat4& posMatrix, const Point<float>& point) {
     vec4 p = {{point.x, point.y, 0, 1}};
     matrix::transformMat4(p, p, posMatrix);
 
-    constexpr float buffer = 0.5f;
-
-    float x = (p[0] / p[3] + 1.0f) / 2.0f;
-    if (x < (0.0f - buffer) || x > (1.0f + buffer)) return false;
-
-    float y = (-p[1] / p[3] + 1.0f) / 2.0f;
-    if (y < (0.0f - buffer) || y > (1.0f + buffer)) return false;
-
-    return true;
+    // buffer covers area of the next zoom level (current zoom - 1 covered area).
+    constexpr float buffer = 1.0f;
+    constexpr float edge = 1.0f + buffer;
+    float x = p[0] / p[3];
+    float y = p[1] / p[3];
+    return (x > -edge && y > -edge && x < edge && y < edge);
 }
 
 } // namespace
 
-bool CrossTileSymbolLayerIndex::addBucket(const OverscaledTileID& tileID,
+bool CrossTileSymbolLayerIndex::addBucket(const RenderTile& renderTile,
                                           SymbolBucket& bucket,
                                           const TransformState& transformState) {
+    const auto& tileID = renderTile.getOverscaledTileID();
     auto& thisZoomIndexes = indexes[tileID.overscaledZ];
     auto previousIndex = thisZoomIndexes.find(tileID);
     if (previousIndex != thisZoomIndexes.end()) {
@@ -136,10 +134,8 @@ bool CrossTileSymbolLayerIndex::addBucket(const OverscaledTileID& tileID,
     if (tileID.overscaleFactor() > 1u) {
         // For overscaled tiles the viewport might be showing only a small part of the tile,
         // so we filter out the off-screen symbols to improve the performance.
-        mat4 posMatrix;
-        const auto& projMatrix = transformState.getProjectionMatrix();
-        transformState.matrixFor(posMatrix, tileID.toUnwrapped());
-        matrix::multiply(posMatrix, projMatrix, posMatrix);
+        mat4 posMatrix = renderTile.matrix;
+        matrix::multiply(posMatrix, transformState.getProjectionMatrix(), posMatrix);
 
         for (auto& symbolInstance : bucket.symbolInstances) {
             if (isInVewport(posMatrix, symbolInstance.anchor.point)) {
@@ -236,7 +232,7 @@ auto CrossTileSymbolIndex::addLayer(const RenderLayer& layer, const TransformSta
     for (const auto& item : layer.getPlacementData()) {
         const RenderTile& renderTile = item.tile;
         Bucket& bucket = item.bucket;
-        auto pair = bucket.registerAtCrossTileIndex(layerIndex, renderTile.getOverscaledTileID(), transformState);
+        auto pair = bucket.registerAtCrossTileIndex(layerIndex, renderTile, transformState);
         assert(pair.first != 0u);
         if (pair.second) result |= AddLayerResult::BucketsAdded;
         currentBucketIDs.insert(pair.first);
