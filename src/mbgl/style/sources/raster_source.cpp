@@ -53,7 +53,7 @@ void RasterSource::loadDescription(FileSource& fileSource) {
     }
 
     const auto& url = urlOrTileset.get<std::string>();
-    req = fileSource.request(Resource::source(url), [this, url](Response res) {
+    req = fileSource.request(Resource::source(url), [this, url](const Response& res) {
         if (res.error) {
             observer->onSourceError(*this, std::make_exception_ptr(std::runtime_error(res.error->message)));
         } else if (res.notModified) {
@@ -85,6 +85,10 @@ void RasterSource::loadDescription(FileSource& fileSource) {
 
 bool RasterSource::supportsLayerType(const mbgl::style::LayerTypeInfo* info) const {
     return mbgl::underlying_type(Tile::Kind::Raster) == mbgl::underlying_type(info->tileKind);
+}
+
+Mutable<Source::Impl> RasterSource::createMutable() const noexcept {
+    return staticMutableCast<Source::Impl>(makeMutable<Impl>(impl()));
 }
 
 } // namespace style

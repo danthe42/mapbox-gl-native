@@ -1,13 +1,23 @@
 #include <mbgl/map/transform_state.hpp>
+#include <mbgl/math/clamp.hpp>
+#include <mbgl/math/log2.hpp>
 #include <mbgl/tile/tile_id.hpp>
 #include <mbgl/util/constants.hpp>
 #include <mbgl/util/interpolate.hpp>
+#include <mbgl/util/logging.hpp>
 #include <mbgl/util/projection.hpp>
 #include <mbgl/util/tile_coordinate.hpp>
-#include <mbgl/math/log2.hpp>
-#include <mbgl/math/clamp.hpp>
 
 namespace mbgl {
+
+namespace {
+LatLng latLngFromMercator(Point<double> mercatorCoordinate, LatLng::WrapMode wrapMode = LatLng::WrapMode::Unwrapped) {
+    return {util::RAD2DEG * (2 * std::atan(std::exp(M_PI - mercatorCoordinate.y * util::M2PI)) - M_PI_2),
+            mercatorCoordinate.x * 360.0 - 180.0,
+            wrapMode};
+}
+} // namespace
+
 TransformState::TransformState(ConstrainMode constrainMode_, ViewportMode viewportMode_)
     : bounds(LatLngBounds()), constrainMode(constrainMode_), viewportMode(viewportMode_) {}
 
@@ -69,8 +79,11 @@ void TransformState::matrixFor(mat4& matrix, const UnwrappedTileID& tileID) cons
     const double s = Projection::worldSize(scale) / tileScale;
 
     matrix::identity(matrix);
-    matrix::translate(
-        matrix, matrix, int64_t(tileID.canonical.x + tileID.wrap * tileScale) * s, int64_t(tileID.canonical.y) * s, 0);
+    matrix::translate(matrix,
+                      matrix,
+                      int64_t(tileID.canonical.x + tileID.wrap * static_cast<int64_t>(tileScale)) * s,
+                      int64_t(tileID.canonical.y) * s,
+                      0);
     matrix::scale(matrix, matrix, s / util::EXTENT, s / util::EXTENT, 1);
 }
 
@@ -80,7 +93,7 @@ void TransformState::getProjMatrix(mat4& projMatrix, uint16_t nearZ, bool aligne
     }
 
     const double cameraToCenterDistance = getCameraToCenterDistance();
-    auto offset = getCenterOffset();
+    const ScreenCoordinate offset = getCenterOffset();
 
     // Find the Z distance from the viewport center point
     // [width/2 + offset.x, height/2 + offset.y] to the top edge; to point
@@ -97,53 +110,39 @@ void TransformState::getProjMatrix(mat4& projMatrix, uint16_t nearZ, bool aligne
     // Add a bit extra to avoid precision problems when a fragment's distance is exactly `furthestDistance`
     const double farZ = furthestDistance * 1.01;
 
-    matrix::perspective(projMatrix, getFieldOfView(), double(size.width) / size.height, nearZ, farZ);
+    // Make sure the camera state is up-to-date
+    updateCameraState();
+
+    mat4 worldToCamera = camera.getWorldToCamera(scale, viewportMode == ViewportMode::FlippedY);
+    mat4 cameraToClip =
+        camera.getCameraToClipPerspective(getFieldOfView(), double(size.width) / size.height, nearZ, farZ);
 
     // Move the center of perspective to center of specified edgeInsets.
     // Values are in range [-1, 1] where the upper and lower range values
     // position viewport center to the screen edges. This is overriden
     // if using axonometric perspective (not in public API yet, Issue #11882).
     // TODO(astojilj): Issue #11882 should take edge insets into account, too.
-    projMatrix[8] = -offset.x * 2.0 / size.width;
-    projMatrix[9] = offset.y * 2.0 / size.height;
-
-    const bool flippedY = viewportMode == ViewportMode::FlippedY;
-    matrix::scale(projMatrix, projMatrix, 1.0, flippedY ? 1 : -1, 1);
-
-    matrix::translate(projMatrix, projMatrix, 0, 0, -cameraToCenterDistance);
-
-    using NO = NorthOrientation;
-    switch (getNorthOrientation()) {
-        case NO::Rightwards:
-            matrix::rotate_y(projMatrix, projMatrix, getPitch());
-            break;
-        case NO::Downwards:
-            matrix::rotate_x(projMatrix, projMatrix, -getPitch());
-            break;
-        case NO::Leftwards:
-            matrix::rotate_y(projMatrix, projMatrix, -getPitch());
-            break;
-        default:
-            matrix::rotate_x(projMatrix, projMatrix, getPitch());
-            break;
+    if (!axonometric) {
+        cameraToClip[8] = -offset.x * 2.0 / size.width;
+        cameraToClip[9] = offset.y * 2.0 / size.height;
     }
 
-    matrix::rotate_z(projMatrix, projMatrix, getBearing() + getNorthOrientationAngle());
+    // Apply north orientation angle
+    if (getNorthOrientation() != NorthOrientation::Upwards) {
+        matrix::rotate_z(cameraToClip, cameraToClip, -getNorthOrientationAngle());
+    }
 
-    const double dx = pixel_x() - size.width / 2.0f, dy = pixel_y() - size.height / 2.0f;
-    matrix::translate(projMatrix, projMatrix, dx, dy, 0);
+    matrix::multiply(projMatrix, cameraToClip, worldToCamera);
 
     if (axonometric) {
         // mat[11] controls perspective
-        projMatrix[11] = 0;
+        projMatrix[11] = 0.0;
 
         // mat[8], mat[9] control x-skew, y-skew
-        projMatrix[8] = xSkew;
-        projMatrix[9] = ySkew;
+        double pixelsPerMeter = 1.0 / Projection::getMetersPerPixelAtLatitude(getLatLng().latitude(), getZoom());
+        projMatrix[8] = xSkew * pixelsPerMeter;
+        projMatrix[9] = ySkew * pixelsPerMeter;
     }
-
-    matrix::scale(projMatrix, projMatrix, 1, 1,
-                  1.0 / Projection::getMetersPerPixelAtLatitude(getLatLng(LatLng::Unwrapped).latitude(), getZoom()));
 
     // Make a second projection matrix that is aligned to a pixel grid for rendering raster tiles.
     // We're rounding the (floating point) x/y values to achieve to avoid rendering raster images to fractional
@@ -151,13 +150,156 @@ void TransformState::getProjMatrix(mat4& projMatrix, uint16_t nearZ, bool aligne
     // is an odd integer to preserve rendering to the pixel grid. We're rotating this shift based on the angle
     // of the transformation so that 0°, 90°, 180°, and 270° rasters are crisp, and adjust the shift so that
     // it is always <= 0.5 pixels.
+
     if (aligned) {
-        const float xShift = float(size.width % 2) / 2, yShift = float(size.height % 2) / 2;
-        const double bearingCos = std::cos(bearing), bearingSin = std::sin(bearing);
+        const double worldSize = Projection::worldSize(scale);
+        const double dx = x - 0.5 * worldSize;
+        const double dy = y - 0.5 * worldSize;
+
+        const float xShift = float(size.width % 2) / 2;
+        const float yShift = float(size.height % 2) / 2;
+        const double bearingCos = std::cos(bearing);
+        const double bearingSin = std::sin(bearing);
         double devNull;
         const float dxa = -std::modf(dx, &devNull) + bearingCos * xShift + bearingSin * yShift;
         const float dya = -std::modf(dy, &devNull) + bearingCos * yShift + bearingSin * xShift;
         matrix::translate(projMatrix, projMatrix, dxa > 0.5 ? dxa - 1 : dxa, dya > 0.5 ? dya - 1 : dya, 0);
+    }
+}
+
+void TransformState::updateCameraState() const {
+    if (!valid()) {
+        return;
+    }
+
+    const double worldSize = Projection::worldSize(scale);
+    const double cameraToCenterDistance = getCameraToCenterDistance();
+
+    // x & y tracks the center of the map in pixels. However as rendering is done in pixel coordinates the rendering
+    // origo is actually in the middle of the map (0.5 * worldSize). x&y positions have to be negated because it defines
+    // position of the map, not the camera. Moving map 10 units left has the same effect as moving camera 10 units to
+    // the right.
+    const double dx = 0.5 * worldSize - x;
+    const double dy = 0.5 * worldSize - y;
+
+    // Set camera orientation and move it to a proper distance from the map
+    camera.setOrientation(getPitch(), getBearing());
+
+    const vec3 forward = camera.forward();
+    const vec3 orbitPosition = {{-forward[0] * cameraToCenterDistance,
+                                 -forward[1] * cameraToCenterDistance,
+                                 -forward[2] * cameraToCenterDistance}};
+    vec3 cameraPosition = {{dx + orbitPosition[0], dy + orbitPosition[1], orbitPosition[2]}};
+
+    cameraPosition[0] /= worldSize;
+    cameraPosition[1] /= worldSize;
+    cameraPosition[2] /= worldSize;
+
+    camera.setPosition(cameraPosition);
+}
+
+void TransformState::updateStateFromCamera() {
+    const vec3 position = camera.getPosition();
+    const vec3 forward = camera.forward();
+
+    const double dx = forward[0];
+    const double dy = forward[1];
+    const double dz = forward[2];
+    assert(position[2] > 0.0 && dz < 0.0);
+
+    // Compute bearing and pitch
+    double newBearing;
+    double newPitch;
+    camera.getOrientation(newPitch, newBearing);
+    newPitch = util::clamp(newPitch, minPitch, maxPitch);
+
+    // Compute zoom level from the camera altitude
+    const double centerDistance = getCameraToCenterDistance();
+    const double zoom = util::log2(centerDistance / (position[2] / std::cos(newPitch) * util::tileSize));
+    const double newScale = util::clamp(std::pow(2.0, zoom), min_scale, max_scale);
+
+    // Compute center point of the map
+    const double travel = -position[2] / dz;
+    const Point<double> mercatorPoint = {position[0] + dx * travel, position[1] + dy * travel};
+
+    setLatLngZoom(latLngFromMercator(mercatorPoint), scaleZoom(newScale));
+    setBearing(newBearing);
+    setPitch(newPitch);
+}
+
+FreeCameraOptions TransformState::getFreeCameraOptions() const {
+    updateCameraState();
+
+    FreeCameraOptions options;
+    options.position = camera.getPosition();
+    options.orientation = camera.getOrientation().m;
+
+    return options;
+}
+
+bool TransformState::setCameraPosition(const vec3& position) {
+    if (std::isnan(position[0]) || std::isnan(position[1]) || std::isnan(position[2])) return false;
+
+    const double maxWorldSize = Projection::worldSize(std::pow(2.0, getMaxZoom()));
+    const double minWorldSize = Projection::worldSize(std::pow(2.0, getMinZoom()));
+    const double distToCenter = getCameraToCenterDistance();
+
+    const vec3 updatedPos = vec3{
+        {position[0], position[1], util::clamp(position[2], distToCenter / maxWorldSize, distToCenter / minWorldSize)}};
+
+    camera.setPosition(updatedPos);
+    return true;
+}
+
+bool TransformState::setCameraOrientation(const Quaternion& orientation_) {
+    const vec4& c = orientation_.m;
+    if (std::isnan(c[0]) || std::isnan(c[1]) || std::isnan(c[2]) || std::isnan(c[3])) {
+        return false;
+    }
+
+    // Zero-length quaternions are not valid
+    if (orientation_.length() == 0.0) {
+        return false;
+    }
+
+    Quaternion unitQuat = orientation_.normalized();
+    const vec3 forward = unitQuat.transform({{0.0, 0.0, -1.0}});
+    const vec3 up = unitQuat.transform({{0.0, -1.0, 0.0}});
+
+    if (up[2] < 0.0) {
+        // Camera is upside down and not recoverable
+        return false;
+    }
+
+    const optional<Quaternion> updatedOrientation = util::Camera::orientationFromFrame(forward, up);
+    if (!updatedOrientation) return false;
+
+    camera.setOrientation(updatedOrientation.value());
+    return true;
+}
+
+void TransformState::setFreeCameraOptions(const FreeCameraOptions& options) {
+    if (!valid()) {
+        return;
+    }
+
+    if (!options.position && !options.orientation) return;
+
+    // Check if the state is dirty and camera needs to be synchronized
+    updateMatricesIfNeeded();
+
+    bool changed = false;
+    if (options.orientation && options.orientation.value() != camera.getOrientation().m) {
+        changed |= setCameraOrientation(options.orientation.value());
+    }
+
+    if (options.position && options.position.value() != camera.getPosition()) {
+        changed |= setCameraPosition(options.position.value());
+    }
+
+    if (changed) {
+        updateStateFromCamera();
+        requestMatricesUpdate = true;
     }
 }
 
@@ -167,15 +309,23 @@ void TransformState::updateMatricesIfNeeded() const {
     getProjMatrix(projectionMatrix);
     coordMatrix = coordinatePointMatrix(projectionMatrix);
 
-    bool err = matrix::invert(invertedMatrix, coordMatrix);
+    bool err = matrix::invert(invProjectionMatrix, projectionMatrix);
+    if (err) throw std::runtime_error("failed to invert projectionMatrix");
 
+    err = matrix::invert(invertedMatrix, coordMatrix);
     if (err) throw std::runtime_error("failed to invert coordinatePointMatrix");
+
     requestMatricesUpdate = false;
 }
 
 const mat4& TransformState::getProjectionMatrix() const {
     updateMatricesIfNeeded();
     return projectionMatrix;
+}
+
+const mat4& TransformState::getInvProjectionMatrix() const {
+    updateMatricesIfNeeded();
+    return invProjectionMatrix;
 }
 
 const mat4& TransformState::getCoordMatrix() const {
@@ -254,7 +404,7 @@ void TransformState::setViewportMode(ViewportMode val) {
 
 #pragma mark - Camera options
 
-CameraOptions TransformState::getCameraOptions(optional<EdgeInsets> padding) const {
+CameraOptions TransformState::getCameraOptions(const optional<EdgeInsets>& padding) const {
     return CameraOptions()
         .withCenter(getLatLng())
         .withPadding(padding ? padding : edgeInsets)
@@ -338,6 +488,30 @@ void TransformState::setMaxZoom(const double maxZoom) {
 
 double TransformState::getMaxZoom() const {
     return scaleZoom(max_scale);
+}
+
+void TransformState::setMinPitch(const double pitch_) {
+    if (pitch_ <= maxPitch) {
+        minPitch = util::clamp(pitch_, util::PITCH_MIN, maxPitch);
+    } else {
+        Log::Warning(Event::General, "Trying to set minimum pitch to larger than maximum pitch, no changes made.");
+    }
+}
+
+double TransformState::getMinPitch() const {
+    return minPitch;
+}
+
+void TransformState::setMaxPitch(const double pitch_) {
+    if (pitch_ >= minPitch) {
+        maxPitch = util::clamp(pitch_, minPitch, util::PITCH_MAX);
+    } else {
+        Log::Warning(Event::General, "Trying to set maximum pitch to smaller than minimum pitch, no changes made.");
+    }
+}
+
+double TransformState::getMaxPitch() const {
+    return maxPitch;
 }
 
 #pragma mark - Scale
@@ -473,11 +647,15 @@ double TransformState::scaleZoom(double s) const {
 }
 
 ScreenCoordinate TransformState::latLngToScreenCoordinate(const LatLng& latLng) const {
+    vec4 p;
+    return latLngToScreenCoordinate(latLng, p);
+}
+
+ScreenCoordinate TransformState::latLngToScreenCoordinate(const LatLng& latLng, vec4& p) const {
     if (size.isEmpty()) {
         return {};
     }
 
-    vec4 p;
     Point<double> pt = Projection::project(latLng, scale) / util::tileSize;
     vec4 c = {{pt.x, pt.y, 0, 1}};
     matrix::transformMat4(p, c, getCoordMatrix());

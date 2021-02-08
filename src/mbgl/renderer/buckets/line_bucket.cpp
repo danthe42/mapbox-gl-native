@@ -5,16 +5,17 @@
 #include <mbgl/util/constants.hpp>
 
 #include <cassert>
+#include <utility>
 
 namespace mbgl {
 
 using namespace style;
 
-LineBucket::LineBucket(const LineBucket::PossiblyEvaluatedLayoutProperties layout_,
+LineBucket::LineBucket(LineBucket::PossiblyEvaluatedLayoutProperties layout_,
                        const std::map<std::string, Immutable<LayerProperties>>& layerPaintProperties,
                        const float zoom_,
                        const uint32_t overscaling_)
-    : layout(layout_), zoom(zoom_), overscaling(overscaling_) {
+    : layout(std::move(layout_)), zoom(zoom_), overscaling(overscaling_) {
     for (const auto& pair : layerPaintProperties) {
         paintPropertyBinders.emplace(
             std::piecewise_construct,
@@ -27,19 +28,23 @@ LineBucket::LineBucket(const LineBucket::PossiblyEvaluatedLayoutProperties layou
 
 LineBucket::~LineBucket() = default;
 
-void LineBucket::addFeature(const GeometryTileFeature& feature, const GeometryCollection& geometryCollection,
-                            const ImagePositions& patternPositions, const PatternLayerMap& patternDependencies,
-                            std::size_t index) {
+void LineBucket::addFeature(const GeometryTileFeature& feature,
+                            const GeometryCollection& geometryCollection,
+                            const ImagePositions& patternPositions,
+                            const PatternLayerMap& patternDependencies,
+                            std::size_t index,
+                            const CanonicalTileID& canonical) {
     for (auto& line : geometryCollection) {
-        addGeometry(line, feature);
+        addGeometry(line, feature, canonical);
     }
 
     for (auto& pair : paintPropertyBinders) {
         const auto it = patternDependencies.find(pair.first);
         if (it != patternDependencies.end()){
-            pair.second.populateVertexVectors(feature, vertices.elements(), index, patternPositions, it->second);
+            pair.second.populateVertexVectors(
+                feature, vertices.elements(), index, patternPositions, it->second, canonical);
         } else {
-            pair.second.populateVertexVectors(feature, vertices.elements(), index, patternPositions, {});
+            pair.second.populateVertexVectors(feature, vertices.elements(), index, patternPositions, {}, canonical);
         }
     }
 }
@@ -93,7 +98,9 @@ private:
     double total;
 };
 
-void LineBucket::addGeometry(const GeometryCoordinates& coordinates, const GeometryTileFeature& feature) {
+void LineBucket::addGeometry(const GeometryCoordinates& coordinates,
+                             const GeometryTileFeature& feature,
+                             const CanonicalTileID& canonical) {
     const FeatureType type = feature.getType();
     const std::size_t len = [&coordinates] {
         std::size_t l = coordinates.size();
@@ -133,7 +140,7 @@ void LineBucket::addGeometry(const GeometryCoordinates& coordinates, const Geome
             *numericValue<double>(clip_start_it->second), *numericValue<double>(clip_end_it->second), total_length};
     }
 
-    const LineJoinType joinType = layout.evaluate<LineJoin>(zoom, feature);
+    const LineJoinType joinType = layout.evaluate<LineJoin>(zoom, feature, canonical);
 
     const float miterLimit = joinType == LineJoinType::Bevel ? 1.05f : float(layout.get<LineMiterLimit>());
 

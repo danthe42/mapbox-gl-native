@@ -5,7 +5,7 @@
 #include <mbgl/util/run_loop.hpp>
 
 #include <args.hxx>
-#include <mapbox/io.hpp>
+#include <mapbox/io/io.hpp>
 
 #include <fstream>
 #include <iostream>
@@ -90,7 +90,7 @@ int main(int argc, char* argv[]) {
     }
 
     mbgl::util::RunLoop loop;
-    auto dbfs = mbgl::FileSourceManager::get()->getFileSource(
+    std::shared_ptr<mbgl::FileSource> dbfs = mbgl::FileSourceManager::get()->getFileSource(
         mbgl::FileSourceType::Database, mbgl::ResourceOptions().withCachePath(args::get(cacheValue)));
     dbfs->forward(resource, response, [&loop] { loop.stop(); });
     loop.run();

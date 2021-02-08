@@ -93,7 +93,6 @@ public:
 
     NSURLSession* session = nil;
     NSString* userAgent = nil;
-    NSInteger accountType = 0;
 
 private:
     NSString* getUserAgent() const;
@@ -196,12 +195,12 @@ BOOL isValidMapboxEndpoint(NSURL *url) {
 }
 
 MGL_APPLE_EXPORT
-NSURL *resourceURLWithAccountType(const Resource& resource, NSInteger accountType) {
+NSURL *resourceURL(const Resource& resource) {
     
     NSURL *url = [NSURL URLWithString:@(resource.url.c_str())];
-    
+
 #if TARGET_OS_IPHONE || TARGET_OS_SIMULATOR
-    if (accountType == 0 && isValidMapboxEndpoint(url)) {
+    if (isValidMapboxEndpoint(url)) {
         NSURLComponents *components = [NSURLComponents componentsWithURL:url resolvingAgainstBaseURL:NO];
         NSMutableArray *queryItems = [NSMutableArray array];
 
@@ -219,8 +218,6 @@ NSURL *resourceURLWithAccountType(const Resource& resource, NSInteger accountTyp
         components.queryItems = queryItems;
         url = components.URL;
     }
-#else
-    (void)accountType;
 #endif
     return url;
 }
@@ -230,7 +227,7 @@ std::unique_ptr<AsyncRequest> HTTPFileSource::request(const Resource& resource, 
     auto shared = request->shared; // Explicit copy so that it also gets copied into the completion handler block below.
 
     @autoreleasepool {
-        NSURL *url = resourceURLWithAccountType(resource, impl->accountType);
+        NSURL *url = resourceURL(resource);
         [MGLNativeNetworkManager.sharedManager debugLog:@"Requesting URI: %@", url.relativePath];
 
         NSMutableURLRequest *req = [NSMutableURLRequest requestWithURL:url];
@@ -249,10 +246,27 @@ std::unique_ptr<AsyncRequest> HTTPFileSource::request(const Resource& resource, 
         if (isTile) {
             [MGLNativeNetworkManager.sharedManager startDownloadEvent:url.relativePath type:@"tile"];
         }
-        
-        request->task = [impl->session
+
+        __block NSURLSession *session;
+
+        // Use the delegate's session if there is one, otherwise use the one that
+        // was created when this class was constructed.
+        MGLNativeNetworkManager *networkManager = MGLNativeNetworkManager.sharedManager;
+        if ([networkManager.delegate respondsToSelector:@selector(sessionForNetworkManager:)]) {
+            session = [networkManager.delegate sessionForNetworkManager:networkManager];
+        }
+
+        if (!session) {
+            session = impl->session;
+        }
+
+        assert(session);
+
+        request->task = [session
             dataTaskWithRequest:req
               completionHandler:^(NSData* data, NSURLResponse* res, NSError* error) {
+                session = nil;
+            
                 if (error && [error code] == NSURLErrorCancelled) {
                     [MGLNativeNetworkManager.sharedManager cancelDownloadEventForResponse:res];
                     return;
@@ -354,6 +368,8 @@ std::unique_ptr<AsyncRequest> HTTPFileSource::request(const Resource& resource, 
                             std::make_unique<Error>(Error::Reason::Other, std::string{ "HTTP status code " } +
                                                                               std::to_string(responseCode));
                     }
+                } else if ([url isFileURL]) {
+                    response.data = std::make_shared<std::string>((const char *)[data bytes], [data length]);
                 } else {
                     // This should never happen.
                     response.error = std::make_unique<Error>(Error::Reason::Other,

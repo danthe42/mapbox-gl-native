@@ -10,7 +10,6 @@
 #include <mbgl/storage/offline_schema.hpp>
 #include <mbgl/storage/merge_sideloaded.hpp>
 
-
 namespace mbgl {
 
 OfflineDatabase::OfflineDatabase(std::string path_)
@@ -98,11 +97,7 @@ bool OfflineDatabase::disabled() {
     }
 
     auto regions = listRegions();
-    if (regions && !regions.value().empty()) {
-        return false;
-    }
-
-    return true;
+    return !(regions && !regions.value().empty());
 }
 
 void OfflineDatabase::handleError(const mapbox::sqlite::Exception& ex, const char* action) {
@@ -162,7 +157,7 @@ void OfflineDatabase::removeExisting() {
 
 void OfflineDatabase::removeOldCacheTable() {
     assert(db);
-    assert(!readOnly);
+    checkFlags();
 
     db->exec("DROP TABLE IF EXISTS http_cache");
     if (autopack) vacuum();
@@ -170,7 +165,7 @@ void OfflineDatabase::removeOldCacheTable() {
 
 void OfflineDatabase::createSchema() {
     assert(db);
-    assert(!readOnly);
+    checkFlags();
 
     vacuum();
     db->exec("PRAGMA journal_mode = DELETE");
@@ -183,7 +178,7 @@ void OfflineDatabase::createSchema() {
 
 void OfflineDatabase::migrateToVersion3() {
     assert(db);
-    assert(!readOnly);
+    checkFlags();
 
     vacuum();
     db->exec("PRAGMA user_version = 3");
@@ -197,7 +192,7 @@ void OfflineDatabase::migrateToVersion3() {
 
 void OfflineDatabase::migrateToVersion5() {
     assert(db);
-    assert(!readOnly);
+    checkFlags();
 
     db->exec("PRAGMA journal_mode = DELETE");
     db->exec("PRAGMA synchronous = FULL");
@@ -206,7 +201,7 @@ void OfflineDatabase::migrateToVersion5() {
 
 void OfflineDatabase::migrateToVersion6() {
     assert(db);
-    assert(!readOnly);
+    checkFlags();
 
     mapbox::sqlite::Transaction transaction(*db);
     db->exec("ALTER TABLE resources ADD COLUMN must_revalidate INTEGER NOT NULL DEFAULT 0");
@@ -217,13 +212,19 @@ void OfflineDatabase::migrateToVersion6() {
 
 void OfflineDatabase::vacuum() {
     assert(db);
-    assert(!readOnly);
+    checkFlags();
 
     if (getPragma<int64_t>("PRAGMA auto_vacuum") != 2 /*INCREMENTAL*/) {
         db->exec("PRAGMA auto_vacuum = INCREMENTAL");
         db->exec("VACUUM");
     } else {
         db->exec("PRAGMA incremental_vacuum");
+    }
+}
+
+void OfflineDatabase::checkFlags() {
+    if (readOnly) {
+        throw std::runtime_error("Cannot modify database in read-only mode");
     }
 }
 
@@ -269,7 +270,7 @@ optional<int64_t> OfflineDatabase::hasInternal(const Resource& resource) {
 }
 
 std::pair<bool, uint64_t> OfflineDatabase::put(const Resource& resource, const Response& response) try {
-    assert(!readOnly);
+    if (readOnly) return {false, 0};
 
     if (!db) {
         initialize();
@@ -289,7 +290,7 @@ std::pair<bool, uint64_t> OfflineDatabase::put(const Resource& resource, const R
 }
 
 std::pair<bool, uint64_t> OfflineDatabase::putInternal(const Resource& resource, const Response& response, bool evict_) {
-    assert(!readOnly);
+    checkFlags();
 
     if (response.error) {
         return { false, 0 };
@@ -305,9 +306,13 @@ std::pair<bool, uint64_t> OfflineDatabase::putInternal(const Resource& resource,
         size = compressed ? compressedData.size() : response.data->size();
     }
 
-    if (evict_ && !evict(size)) {
-        Log::Info(Event::Database, "Unable to make space for entry");
-        return { false, 0 };
+    optional<DatabaseSizeChangeStats> stats;
+    if (evict_) {
+        stats = DatabaseSizeChangeStats(this);
+        if (!evict(size, *stats)) {
+            Log::Info(Event::Database, "Unable to make space for entry");
+            return {false, 0};
+        }
     }
 
     bool inserted;
@@ -321,6 +326,10 @@ std::pair<bool, uint64_t> OfflineDatabase::putInternal(const Resource& resource,
         inserted = putResource(resource, response,
                 compressed ? compressedData : response.data ? *response.data : "",
                 compressed);
+    }
+
+    if (stats) {
+        updateAmbientCacheSize(*stats);
     }
 
     return { inserted, size };
@@ -394,7 +403,7 @@ bool OfflineDatabase::putResource(const Resource& resource,
                                   const Response& response,
                                   const std::string& data,
                                   bool compressed) {
-    assert(!readOnly);
+    checkFlags();
 
     if (response.notModified) {
         // clang-format off
@@ -582,7 +591,7 @@ bool OfflineDatabase::putTile(const Resource::TileData& tile,
                               const Response& response,
                               const std::string& data,
                               bool compressed) {
-    assert(!readOnly);
+    checkFlags();
 
     if (response.notModified) {
         // clang-format off
@@ -684,7 +693,7 @@ bool OfflineDatabase::putTile(const Resource::TileData& tile,
 }
 
 std::exception_ptr OfflineDatabase::invalidateAmbientCache() try {
-    assert(!readOnly);
+    checkFlags();
 
     // clang-format off
     mapbox::sqlite::Query tileQuery{ getStatement(
@@ -717,7 +726,7 @@ std::exception_ptr OfflineDatabase::invalidateAmbientCache() try {
 }
 
 std::exception_ptr OfflineDatabase::clearAmbientCache() try {
-    assert(!readOnly);
+    checkFlags();
 
     // clang-format off
     mapbox::sqlite::Query tileQuery{ getStatement(
@@ -750,7 +759,7 @@ std::exception_ptr OfflineDatabase::clearAmbientCache() try {
 }
 
 std::exception_ptr OfflineDatabase::invalidateRegion(int64_t regionID) try {
-    assert(!readOnly);
+    checkFlags();
 
     {
         // clang-format off
@@ -814,7 +823,7 @@ expected<OfflineRegions, std::exception_ptr> OfflineDatabase::listRegions() try 
 expected<OfflineRegion, std::exception_ptr>
 OfflineDatabase::createRegion(const OfflineRegionDefinition& definition,
                               const OfflineRegionMetadata& metadata) try {
-    assert(!readOnly);
+    checkFlags();
 
     // clang-format off
     mapbox::sqlite::Query query{ getStatement(
@@ -833,7 +842,7 @@ OfflineDatabase::createRegion(const OfflineRegionDefinition& definition,
 
 expected<OfflineRegions, std::exception_ptr>
 OfflineDatabase::mergeDatabase(const std::string& sideDatabasePath) {
-    assert(!readOnly);
+    checkFlags();
 
     try {
         // clang-format off
@@ -911,7 +920,7 @@ OfflineDatabase::mergeDatabase(const std::string& sideDatabasePath) {
 
 expected<OfflineRegionMetadata, std::exception_ptr>
 OfflineDatabase::updateMetadata(const int64_t regionID, const OfflineRegionMetadata& metadata) try {
-    assert(!readOnly);
+    checkFlags();
 
     // clang-format off
     mapbox::sqlite::Query query{ getStatement(
@@ -929,7 +938,7 @@ OfflineDatabase::updateMetadata(const int64_t regionID, const OfflineRegionMetad
 }
 
 std::exception_ptr OfflineDatabase::deleteRegion(OfflineRegion&& region) try {
-    assert(!readOnly);
+    checkFlags();
 
     {
         mapbox::sqlite::Query query{ getStatement("DELETE FROM regions WHERE id = ?") };
@@ -937,9 +946,11 @@ std::exception_ptr OfflineDatabase::deleteRegion(OfflineRegion&& region) try {
         query.run();
     }
 
-    evict(0);
+    DatabaseSizeChangeStats stats(this);
+    evict(0, stats);
     assert(db);
     if (autopack) vacuum();
+    updateAmbientCacheSize(stats);
 
     // Ensure that the cached offlineTileCount value is recalculated.
     offlineMapboxTileCount = nullopt;
@@ -966,7 +977,7 @@ optional<int64_t> OfflineDatabase::hasRegionResource(const Resource& resource) t
 uint64_t OfflineDatabase::putRegionResource(int64_t regionID,
                                             const Resource& resource,
                                             const Response& response) try {
-    assert(!readOnly);
+    checkFlags();
 
     if (!db) {
         initialize();
@@ -983,7 +994,7 @@ uint64_t OfflineDatabase::putRegionResource(int64_t regionID,
 void OfflineDatabase::putRegionResources(int64_t regionID,
                                          const std::list<std::tuple<Resource, Response>>& resources,
                                          OfflineRegionStatus& status) try {
-    assert(!readOnly);
+    checkFlags();
 
     if (!db) {
         initialize();
@@ -1028,7 +1039,7 @@ void OfflineDatabase::putRegionResources(int64_t regionID,
 }
 
 uint64_t OfflineDatabase::putRegionResourceInternal(int64_t regionID, const Resource& resource, const Response& response) {
-    assert(!readOnly);
+    checkFlags();
 
     uint64_t size = putInternal(resource, response, false).second;
     bool previouslyUnused = markUsed(regionID, resource);
@@ -1048,7 +1059,7 @@ uint64_t OfflineDatabase::putRegionResourceInternal(int64_t regionID, const Reso
 }
 
 bool OfflineDatabase::markUsed(int64_t regionID, const Resource& resource) {
-    assert(!readOnly);
+    checkFlags();
 
     if (resource.kind == Resource::Kind::Tile) {
         // clang-format off
@@ -1201,19 +1212,13 @@ T OfflineDatabase::getPragma(const char* sql) {
 // and as it approaches to the hard limit (i.e. the actual file size) we
 // delete an arbitrary number of old cache entries. The free pages approach saves
 // us from calling VACUUM or keeping a running total, which can be costly.
-bool OfflineDatabase::evict(uint64_t neededFreeSize) {
-    assert(!readOnly);
+bool OfflineDatabase::evict(uint64_t neededFreeSize, DatabaseSizeChangeStats& stats) {
+    checkFlags();
+    uint64_t ambientCacheSize =
+        (initAmbientCacheSize() == nullptr) ? *currentAmbientCacheSize : maximumAmbientCacheSize;
+    uint64_t newAmbientCacheSize = ambientCacheSize + neededFreeSize + stats.pageSize();
 
-    uint64_t pageSize = getPragma<int64_t>("PRAGMA page_size");
-    uint64_t pageCount = getPragma<int64_t>("PRAGMA page_count");
-
-    auto usedSize = [&] {
-        return pageSize * (pageCount - getPragma<int64_t>("PRAGMA freelist_count"));
-    };
-
-    // The addition of pageSize is a fudge factor to account for non `data` column
-    // size, and because pages can get fragmented on the database.
-    while (usedSize() + neededFreeSize + pageSize > maximumAmbientCacheSize) {
+    while (newAmbientCacheSize > maximumAmbientCacheSize) {
         // clang-format off
         mapbox::sqlite::Query accessedQuery{ getStatement(
             "SELECT max(accessed) "
@@ -1269,9 +1274,12 @@ bool OfflineDatabase::evict(uint64_t neededFreeSize) {
         tileQuery.run();
         const uint64_t tileChanges = tileQuery.changes();
 
+        // Update current ambient cache size, based on how many bytes were released.
+        newAmbientCacheSize = std::max<int64_t>(
+            static_cast<int64_t>(newAmbientCacheSize) - static_cast<int64_t>(stats.bytesReleased()), 0u);
+
         // The cached value of offlineTileCount does not need to be updated
         // here because only non-offline tiles can be removed by eviction.
-
         if (resourceChanges == 0 && tileChanges == 0) {
             return false;
         }
@@ -1280,18 +1288,75 @@ bool OfflineDatabase::evict(uint64_t neededFreeSize) {
     return true;
 }
 
+std::exception_ptr OfflineDatabase::initAmbientCacheSize() {
+    if (!currentAmbientCacheSize) {
+        try {
+            // clang-format off
+            mapbox::sqlite::Query query{ getStatement(
+            "SELECT SUM(data) "
+            "FROM ( "
+            "    SELECT SUM(IFNULL(LENGTH(data), 0) "
+            "               + IFNULL(LENGTH(id), 0) "
+            "               + IFNULL(LENGTH(url_template), 0) "
+            "               + IFNULL(LENGTH(pixel_ratio), 0) "
+            "               + IFNULL(LENGTH(x), 0) "
+            "               + IFNULL(LENGTH(y), 0) "
+            "               + IFNULL(LENGTH(z), 0) "
+            "               + IFNULL(LENGTH(expires), 0) "
+            "               + IFNULL(LENGTH(modified), 0) "
+            "               + IFNULL(LENGTH(etag), 0) "
+            "               + IFNULL(LENGTH(compressed), 0) "
+            "               + IFNULL(LENGTH(accessed), 0) "
+            "               + IFNULL(LENGTH(must_revalidate), 0) "
+            "               ) as data "
+            "    FROM tiles "
+            "    LEFT JOIN region_tiles "
+            "    ON tile_id = tiles.id "
+            "    WHERE tile_id IS NULL "
+            "  UNION ALL "
+            "    SELECT SUM(IFNULL(LENGTH(data), 0) "
+            "               + IFNULL(LENGTH(id), 0) "
+            "               + IFNULL(LENGTH(url), 0) "
+            "               + IFNULL(LENGTH(kind), 0) "
+            "               + IFNULL(LENGTH(expires), 0) "
+            "               + IFNULL(LENGTH(modified), 0) "
+            "               + IFNULL(LENGTH(etag), 0) "
+            "               + IFNULL(LENGTH(compressed), 0) "
+            "               + IFNULL(LENGTH(accessed), 0) "
+            "               + IFNULL(LENGTH(must_revalidate), 0) "
+            "               ) as data "
+            "    FROM resources "
+            "    LEFT JOIN region_resources "
+            "    ON resource_id = resources.id "
+            "    WHERE resource_id IS NULL "
+            ") ") };
+            // clang-format on
+            query.run();
+            currentAmbientCacheSize = query.get<int64_t>(0);
+        } catch (const mapbox::sqlite::Exception& ex) {
+            handleError(ex, "cannot get current ambient cache size");
+            return std::current_exception();
+        }
+    }
+
+    return nullptr;
+}
+
 std::exception_ptr OfflineDatabase::setMaximumAmbientCacheSize(uint64_t size) {
     uint64_t previousMaximumAmbientCacheSize = maximumAmbientCacheSize;
+
+    if (auto exception = initAmbientCacheSize()) {
+        return exception;
+    }
 
     try {
         maximumAmbientCacheSize = size;
 
-        uint64_t databaseSize = getPragma<int64_t>("PRAGMA page_size")
-            * getPragma<int64_t>("PRAGMA page_count");
-
-        if (databaseSize > maximumAmbientCacheSize) {
-            evict(0);
+        if (*currentAmbientCacheSize > maximumAmbientCacheSize) {
+            DatabaseSizeChangeStats stats(this);
+            evict(0, stats);
             if (autopack) vacuum();
+            updateAmbientCacheSize(stats);
         }
 
         return nullptr;
@@ -1378,14 +1443,43 @@ std::exception_ptr OfflineDatabase::resetDatabase() try {
     return std::current_exception();
 }
 
-void OfflineDatabase::reopenDatabaseReadOnlyForTesting() {
-    readOnly = true;
-
+void OfflineDatabase::reopenDatabaseReadOnly(bool readOnly_) {
+    if (readOnly == readOnly_) return;
     try {
         cleanup();
+        readOnly = readOnly_;
         initialize();
     } catch (...) {
         handleError("reopen database read-only");
+    }
+}
+
+OfflineDatabase::DatabaseSizeChangeStats::DatabaseSizeChangeStats(OfflineDatabase* db_) : db(db_) {
+    assert(db);
+    pageSize_ = db->getPragma<int64_t>("PRAGMA page_size");
+    pageCount_ = db->getPragma<int64_t>("PRAGMA page_count");
+    initialSize_ = pageSize_ * (pageCount_ - db->getPragma<int64_t>("PRAGMA freelist_count"));
+}
+
+uint64_t OfflineDatabase::DatabaseSizeChangeStats::pageSize() const {
+    return pageSize_;
+}
+
+int64_t OfflineDatabase::DatabaseSizeChangeStats::diff() const {
+    const int64_t currentSize = static_cast<int64_t>(pageSize_) * (db->getPragma<int64_t>("PRAGMA page_count") -
+                                                                   db->getPragma<int64_t>("PRAGMA freelist_count"));
+    return currentSize - static_cast<int64_t>(initialSize_);
+}
+
+uint64_t OfflineDatabase::DatabaseSizeChangeStats::bytesReleased() const {
+    uint64_t currentSize = pageSize_ * (pageCount_ - db->getPragma<int64_t>("PRAGMA freelist_count"));
+    return std::max<int64_t>(initialSize_ - currentSize, 0u);
+}
+
+void OfflineDatabase::updateAmbientCacheSize(DatabaseSizeChangeStats& stats) {
+    assert(currentAmbientCacheSize);
+    if (currentAmbientCacheSize) {
+        *currentAmbientCacheSize = std::max<int64_t>(static_cast<int64_t>(*currentAmbientCacheSize) + stats.diff(), 0u);
     }
 }
 

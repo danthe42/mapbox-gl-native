@@ -126,16 +126,7 @@ Value ValueConverter<mbgl::Value>::toExpressionValue(const mbgl::Value& value) {
 
 mbgl::Value ValueConverter<mbgl::Value>::fromExpressionValue(const Value& value) {
     return value.match(
-        [&](const Color& color) -> mbgl::Value {
-            std::array<double, 4> array = color.toArray();
-            return std::vector<mbgl::Value>{
-                std::string("rgba"),
-                array[0],
-                array[1],
-                array[2],
-                array[3],
-            };
-        },
+        [&](const Color& color) -> mbgl::Value { return color.serialize(); },
         [&](const Collator&) -> mbgl::Value {
             // fromExpressionValue can't be used for Collator values,
             // because they have no meaningful representation as an mbgl::Value
@@ -278,6 +269,15 @@ optional<Position> ValueConverter<Position>::fromExpressionValue(const Value& v)
     return pos ? optional<Position>(Position(*pos)) : optional<Position>();
 }
 
+Value ValueConverter<Rotation>::toExpressionValue(const mbgl::style::Rotation& value) {
+    return ValueConverter<float>::toExpressionValue(value.getAngle());
+}
+
+optional<Rotation> ValueConverter<Rotation>::fromExpressionValue(const Value& v) {
+    auto angle = ValueConverter<float>::fromExpressionValue(v);
+    return angle ? optional<Rotation>(Rotation(*angle)) : optional<Rotation>();
+}
+
 template <typename T>
 Value ValueConverter<T, std::enable_if_t< std::is_enum<T>::value >>::toExpressionValue(const T& value) {
     return std::string(Enum<T>::toString(value));
@@ -319,9 +319,14 @@ template <> type::Type valueTypeToExpressionType<type::ErrorType>() { return typ
 template type::Type valueTypeToExpressionType<std::array<double, 4>>();
 template struct ValueConverter<std::array<double, 4>>;
 
+// for LocationIndicator position
+template type::Type valueTypeToExpressionType<std::array<double, 3>>();
+template struct ValueConverter<std::array<double, 3>>;
+
 // layout/paint property types
 template type::Type valueTypeToExpressionType<float>();
 template type::Type valueTypeToExpressionType<Position>();
+template type::Type valueTypeToExpressionType<Rotation>();
 
 template type::Type valueTypeToExpressionType<std::array<float, 2>>();
 template struct ValueConverter<std::array<float, 2>>;

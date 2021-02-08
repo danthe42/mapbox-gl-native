@@ -27,10 +27,10 @@ TEST(ImageManager, Basic) {
     auto images = parseSprite(util::read_file("test/fixtures/annotations/emerald.png"),
                               util::read_file("test/fixtures/annotations/emerald.json"));
     for (auto& image : images) {
-        imageManager.addImage(image->baseImpl);
-        auto* stored = imageManager.getImage(image->getID());
+        imageManager.addImage(image);
+        auto* stored = imageManager.getImage(image->id);
         ASSERT_TRUE(stored);
-        EXPECT_EQ(image->getImage().size, stored->image.size);
+        EXPECT_EQ(image->image.size, stored->image.size);
     }
 }
 
@@ -140,7 +140,7 @@ class StubImageManagerObserver : public ImageManagerObserver {
     public:
     int count = 0;
     std::function<void (const std::string&)> imageMissing = [](const std::string&){};
-    void onStyleImageMissing(const std::string& id, std::function<void()> done) override {
+    void onStyleImageMissing(const std::string& id, const std::function<void()>& done) override {
         count++;
         imageMissing(id);
         done();

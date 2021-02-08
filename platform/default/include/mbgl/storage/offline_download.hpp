@@ -40,6 +40,7 @@ private:
     void activateDownload();
     void continueDownload();
     void deactivateDownload();
+    bool flushResourcesBuffer();
 
     /*
      * Ensure that the resource is stored in the database, requesting it if necessary.
@@ -58,7 +59,7 @@ private:
     std::unique_ptr<OfflineRegionObserver> observer;
 
     std::list<std::unique_ptr<AsyncRequest>> requests;
-    std::unordered_set<std::string> requiredSourceURLs;
+    std::set<std::string> requiredSourceURLs;
     std::deque<Resource> resourcesRemaining;
     std::list<Resource> resourcesToBeMarkedAsUsed;
     std::list<std::tuple<Resource, Response>> buffer;

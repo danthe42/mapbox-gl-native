@@ -36,7 +36,12 @@ public:
                         const ImageMap&,
                         const ImagePositions&) override;
 
-    void createBucket(const ImagePositions&, std::unique_ptr<FeatureIndex>&, std::unordered_map<std::string, LayerRenderData>&, const bool firstLoad, const bool showCollisionBoxes) override;
+    void createBucket(const ImagePositions&,
+                      std::unique_ptr<FeatureIndex>&,
+                      std::unordered_map<std::string, LayerRenderData>&,
+                      bool firstLoad,
+                      bool showCollisionBoxes,
+                      const CanonicalTileID& canonical) override;
 
     bool hasSymbolInstances() const override;
     bool hasDependencies() const override;
@@ -45,6 +50,7 @@ public:
 
     const std::string bucketLeaderID;
     std::vector<SymbolInstance> symbolInstances;
+    std::vector<SortKeyRange> sortKeyRanges;
 
     static constexpr float INVALID_OFFSET_VALUE = std::numeric_limits<float>::max();
     /**
@@ -59,7 +65,7 @@ public:
     static std::vector<float> calculateTileDistances(const GeometryCoordinates& line, const Anchor& anchor);
 
 private:
-    void addFeature(const size_t,
+    void addFeature(size_t,
                     const SymbolFeature&,
                     const ShapedTextOrientations& shapedTextOrientations,
                     optional<PositionedIcon> shapedIcon,
@@ -67,22 +73,22 @@ private:
                     std::array<float, 2> textOffset,
                     float layoutTextSize,
                     float layoutIconSize,
-                    const SymbolContent iconType);
+                    SymbolContent iconType);
 
-    bool anchorIsTooClose(const std::u16string& text, const float repeatDistance, const Anchor&);
+    bool anchorIsTooClose(const std::u16string& text, float repeatDistance, const Anchor&);
     std::map<std::u16string, std::vector<Anchor>> compareText;
 
     void addToDebugBuffers(SymbolBucket&);
 
     // Adds placed items to the buffer.
     size_t addSymbol(SymbolBucket::Buffer&,
-                     const Range<float> sizeData,
+                     Range<float> sizeData,
                      const SymbolQuad&,
                      const Anchor& labelAnchor,
                      PlacedSymbol& placedSymbol,
                      float sortKey);
     size_t addSymbols(SymbolBucket::Buffer&,
-                      const Range<float> sizeData,
+                      Range<float> sizeData,
                       const SymbolQuads&,
                       const Anchor& labelAnchor,
                       PlacedSymbol& placedSymbol,
@@ -96,17 +102,20 @@ private:
                                     WritingModeType,
                                     optional<size_t>& placedIndex,
                                     const SymbolQuads&,
+                                    const CanonicalTileID& canonical,
                                     optional<std::size_t> lastAddedSection = nullopt);
 
     void updatePaintPropertiesForSection(SymbolBucket&,
                                          const SymbolFeature&,
-                                         std::size_t sectionIndex);
+                                         std::size_t sectionIndex,
+                                         const CanonicalTileID& canonical);
 
     // Stores the layer so that we can hold on to GeometryTileFeature instances in SymbolFeature,
     // which may reference data from this object.
     const std::unique_ptr<GeometryTileLayer> sourceLayer;
     const float overscaling;
     const float zoom;
+    const CanonicalTileID canonicalID;
     const MapMode mode;
     const float pixelRatio;
 
@@ -115,6 +124,7 @@ private:
 
     bool iconsNeedLinear = false;
     bool sortFeaturesByY = false;
+    bool sortFeaturesByKey = false;
     bool allowVerticalPlacement = false;
     bool iconsInText = false;
     std::vector<style::TextWritingModeType> placementModes;

@@ -9,6 +9,7 @@
 
 #include <mbgl/actor/scheduler.hpp>
 #include <mbgl/annotation/annotation.hpp>
+#include <mbgl/gl/custom_layer.hpp>
 #include <mbgl/map/camera.hpp>
 #include <mbgl/map/map.hpp>
 #include <mbgl/map/map_options.hpp>
@@ -28,7 +29,6 @@
 #include <mbgl/style/image.hpp>
 #include <mbgl/style/layers/background_layer.hpp>
 #include <mbgl/style/layers/circle_layer.hpp>
-#include <mbgl/style/layers/custom_layer.hpp>
 #include <mbgl/style/layers/fill_extrusion_layer.hpp>
 #include <mbgl/style/layers/fill_layer.hpp>
 #include <mbgl/style/layers/line_layer.hpp>
@@ -737,7 +737,7 @@ double QMapboxGL::maximumZoom() const
 */
 Coordinate QMapboxGL::coordinate() const
 {
-    const mbgl::LatLng& latLng = *d_ptr->mapObj->getCameraOptions(d_ptr->margins).center;
+    const mbgl::LatLng latLng = *d_ptr->mapObj->getCameraOptions(d_ptr->margins).center;
     return Coordinate(latLng.latitude(), latLng.longitude());
 }
 
@@ -1751,8 +1751,9 @@ QMapboxGLPrivate::QMapboxGLPrivate(QMapboxGL *q, const QMapboxGLSettings &settin
                                                mbgl::ResourceTransform::FinishedCallback onFinished) {
              actorRef.invoke(&mbgl::ResourceTransform::TransformCallback::operator(), kind, url, std::move(onFinished));
          }};
-         auto fs = mbgl::FileSourceManager::get()->getFileSource(mbgl::FileSourceType::Network, resourceOptions);
-         std::static_pointer_cast<mbgl::OnlineFileSource>(fs)->setResourceTransform(std::move(transform));
+         std::shared_ptr<mbgl::FileSource> fs =
+             mbgl::FileSourceManager::get()->getFileSource(mbgl::FileSourceType::Network, resourceOptions);
+         fs->setResourceTransform(std::move(transform));
      }
 
     // Needs to be Queued to give time to discard redundant draw calls via the `renderQueued` flag.

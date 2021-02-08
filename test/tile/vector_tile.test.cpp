@@ -31,17 +31,15 @@ public:
     GlyphManager glyphManager;
     Tileset tileset { { "https://example.com" }, { 0, 22 }, "none" };
 
-    TileParameters tileParameters {
-        1.0,
-        MapDebugOptions(),
-        transformState,
-        fileSource,
-        MapMode::Continuous,
-        annotationManager,
-        imageManager,
-        glyphManager,
-        0
-    };
+    TileParameters tileParameters{1.0,
+                                  MapDebugOptions(),
+                                  transformState,
+                                  fileSource,
+                                  MapMode::Continuous,
+                                  annotationManager.makeWeakPtr(),
+                                  imageManager,
+                                  glyphManager,
+                                  0};
 };
 
 TEST(VectorTile, setError) {
@@ -90,6 +88,8 @@ TEST(VectorTileData, ParseResults) {
         layer->getFeature(17154u);
         ASSERT_TRUE(false) << "should throw: feature index is out of range.";
     } catch (const std::out_of_range&) {
+        ASSERT_TRUE(true);
+    } catch (...) { // needed for iOS when MBGL_WITH_RTTI=OFF
         ASSERT_TRUE(true);
     }
 

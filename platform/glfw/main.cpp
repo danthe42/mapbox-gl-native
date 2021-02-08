@@ -95,9 +95,6 @@ int main(int argc, char *argv[]) {
         mbgl::Log::Info(mbgl::Event::General, "BENCHMARK MODE: Some optimizations are disabled.");
     }
 
-    GLFWView backend(fullscreen, benchmark);
-    view = &backend;
-
     // Set access token if present
     std::string token(getenv("MAPBOX_ACCESS_TOKEN") ?: "");
     if (token.empty()) {
@@ -107,7 +104,10 @@ int main(int argc, char *argv[]) {
     mbgl::ResourceOptions resourceOptions;
     resourceOptions.withCachePath(cacheDB).withAccessToken(token);
 
-    auto onlineFileSource =
+    GLFWView backend(fullscreen, benchmark, resourceOptions);
+    view = &backend;
+
+    std::shared_ptr<mbgl::FileSource> onlineFileSource =
         mbgl::FileSourceManager::get()->getFileSource(mbgl::FileSourceType::Network, resourceOptions);
     if (!settings.online) {
         if (onlineFileSource) {
@@ -165,7 +165,7 @@ int main(int argc, char *argv[]) {
     });
 
     // Resource loader controls top-level request processing and can resume / pause all managed sources simultaneously.
-    auto resourceLoader =
+    std::shared_ptr<mbgl::FileSource> resourceLoader =
         mbgl::FileSourceManager::get()->getFileSource(mbgl::FileSourceType::ResourceLoader, resourceOptions);
     view->setPauseResumeCallback([resourceLoader]() {
         static bool isPaused = false;
@@ -180,10 +180,10 @@ int main(int argc, char *argv[]) {
     });
 
     // Database file source.
-    auto databaseFileSource = std::static_pointer_cast<mbgl::DatabaseFileSource>(
-        mbgl::FileSourceManager::get()->getFileSource(mbgl::FileSourceType::Database, resourceOptions));
+    auto databaseFileSource = std::static_pointer_cast<mbgl::DatabaseFileSource>(std::shared_ptr<mbgl::FileSource>(
+        mbgl::FileSourceManager::get()->getFileSource(mbgl::FileSourceType::Database, resourceOptions)));
     view->setResetCacheCallback([databaseFileSource]() {
-        databaseFileSource->resetDatabase([](std::exception_ptr ex) {
+        databaseFileSource->resetDatabase([](const std::exception_ptr& ex) {
             if (ex) {
                 mbgl::Log::Error(mbgl::Event::Database, "Failed to reset cache:: %s", mbgl::util::toString(ex).c_str());
             }

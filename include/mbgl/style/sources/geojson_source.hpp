@@ -7,8 +7,8 @@
 #include <mbgl/util/geojson.hpp>
 #include <mbgl/util/optional.hpp>
 
+#include <map>
 #include <memory>
-#include <unordered_map>
 #include <utility>
 
 namespace mbgl {
@@ -32,7 +32,7 @@ struct GeoJSONOptions {
     uint8_t clusterMaxZoom = 17;
     using ClusterExpression = std::pair<std::shared_ptr<mbgl::style::expression::Expression>,
                                         std::shared_ptr<mbgl::style::expression::Expression>>;
-    using ClusterProperties = std::unordered_map<std::string, ClusterExpression>;
+    using ClusterProperties = std::map<std::string, ClusterExpression>;
     ClusterProperties clusterProperties;
 
     static Immutable<GeoJSONOptions> defaultOptions();
@@ -42,17 +42,18 @@ public:
     using TileFeatures = mapbox::feature::feature_collection<int16_t>;
     using Features = mapbox::feature::feature_collection<double>;
     static std::shared_ptr<GeoJSONData> create(const GeoJSON&,
-                                               Immutable<GeoJSONOptions> = GeoJSONOptions::defaultOptions());
+                                               const Immutable<GeoJSONOptions>& = GeoJSONOptions::defaultOptions(),
+                                               std::shared_ptr<Scheduler> scheduler = nullptr);
 
     virtual ~GeoJSONData() = default;
     virtual void getTile(const CanonicalTileID&, const std::function<void(TileFeatures)>&) = 0;
 
     // SuperclusterData
-    virtual Features getChildren(const std::uint32_t) = 0;
-    virtual Features getLeaves(const std::uint32_t,
-                               const std::uint32_t limit = 10u,
-                               const std::uint32_t offset = 0u) = 0;
+    virtual Features getChildren(std::uint32_t) = 0;
+    virtual Features getLeaves(std::uint32_t, std::uint32_t limit, std::uint32_t offset) = 0;
     virtual std::uint8_t getClusterExpansionZoom(std::uint32_t) = 0;
+
+    virtual std::shared_ptr<Scheduler> getScheduler() { return nullptr; }
 };
 
 class GeoJSONSource final : public Source {
@@ -77,6 +78,9 @@ public:
     mapbox::base::WeakPtr<Source> makeWeakPtr() override {
         return weakFactory.makeWeakPtr();
     }
+
+protected:
+    Mutable<Source::Impl> createMutable() const noexcept final;
 
 private:
     optional<std::string> url;

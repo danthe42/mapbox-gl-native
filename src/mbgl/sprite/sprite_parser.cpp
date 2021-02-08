@@ -1,5 +1,6 @@
 #include <mbgl/sprite/sprite_parser.hpp>
 #include <mbgl/style/image.hpp>
+#include <mbgl/style/image_impl.hpp>
 
 #include <mbgl/util/exception.hpp>
 #include <mbgl/util/logging.hpp>
@@ -8,6 +9,7 @@
 #include <mbgl/util/rapidjson.hpp>
 #include <mbgl/util/string.hpp>
 
+#include <algorithm>
 #include <cmath>
 #include <limits>
 
@@ -15,22 +17,22 @@ namespace mbgl {
 
 std::unique_ptr<style::Image> createStyleImage(const std::string& id,
                                                const PremultipliedImage& image,
-                                               const uint32_t srcX,
-                                               const uint32_t srcY,
-                                               const uint32_t width,
-                                               const uint32_t height,
+                                               const int32_t srcX,
+                                               const int32_t srcY,
+                                               const int32_t width,
+                                               const int32_t height,
                                                const double ratio,
                                                const bool sdf,
                                                style::ImageStretches&& stretchX,
                                                style::ImageStretches&& stretchY,
-                                               optional<style::ImageContent> content) {
+                                               const optional<style::ImageContent>& content) {
     // Disallow invalid parameter configurations.
-    if (width <= 0 || height <= 0 || width > 1024 || height > 1024 ||
-        ratio <= 0 || ratio > 10 ||
-        srcX >= image.size.width || srcY >= image.size.height ||
-        srcX + width > image.size.width || srcY + height > image.size.height) {
+    if (width <= 0 || height <= 0 || width > 1024 || height > 1024 || ratio <= 0 || ratio > 10 || srcX < 0 ||
+        srcY < 0 || srcX >= static_cast<int32_t>(image.size.width) || srcY >= static_cast<int32_t>(image.size.height) ||
+        srcX + width > static_cast<int32_t>(image.size.width) ||
+        srcY + height > static_cast<int32_t>(image.size.height)) {
         Log::Error(Event::Sprite,
-                   "Can't create image with invalid metrics: %ux%u@%u,%u in %ux%u@%sx sprite",
+                   "Can't create image with invalid metrics: %dx%d@%d,%d in %ux%u@%sx sprite",
                    width,
                    height,
                    srcX,
@@ -41,14 +43,15 @@ std::unique_ptr<style::Image> createStyleImage(const std::string& id,
         return nullptr;
     }
 
-    PremultipliedImage dstImage({ width, height });
+    const Size size(static_cast<uint32_t>(width), static_cast<uint32_t>(height));
+    PremultipliedImage dstImage(size);
 
     // Copy from the source image into our individual sprite image
-    PremultipliedImage::copy(image, dstImage, { srcX, srcY }, { 0, 0 }, { width, height });
+    PremultipliedImage::copy(image, dstImage, {static_cast<uint32_t>(srcX), static_cast<uint32_t>(srcY)}, {0, 0}, size);
 
     try {
         return std::make_unique<style::Image>(
-            id, std::move(dstImage), ratio, sdf, std::move(stretchX), std::move(stretchY), std::move(content));
+            id, std::move(dstImage), ratio, sdf, std::move(stretchX), std::move(stretchY), content);
     } catch (const util::StyleImageException& ex) {
         Log::Error(Event::Sprite, "Can't create image with invalid metadata: %s", ex.what());
         return nullptr;
@@ -149,50 +152,50 @@ optional<style::ImageContent> getContent(const JSValue& value, const char* prope
 
 } // namespace
 
-std::vector<std::unique_ptr<style::Image>> parseSprite(const std::string& encodedImage, const std::string& json) {
+std::vector<Immutable<style::Image::Impl>> parseSprite(const std::string& encodedImage, const std::string& json) {
     const PremultipliedImage raster = decodeImage(encodedImage);
 
     JSDocument doc;
     doc.Parse<0>(json.c_str());
     if (doc.HasParseError()) {
         throw std::runtime_error("Failed to parse JSON: " + formatJSONParseError(doc));
-    } else if (!doc.IsObject()) {
+    }
+
+    if (!doc.IsObject()) {
         throw std::runtime_error("Sprite JSON root must be an object");
-    } else {
-        std::vector<std::unique_ptr<style::Image>> images;
-        for (const auto& property : doc.GetObject()) {
-            const std::string name = { property.name.GetString(), property.name.GetStringLength() };
-            const JSValue& value = property.value;
+    }
 
-            if (value.IsObject()) {
-                const uint16_t x = getUInt16(value, "x", name.c_str(), 0);
-                const uint16_t y = getUInt16(value, "y", name.c_str(), 0);
-                const uint16_t width = getUInt16(value, "width", name.c_str(), 0);
-                const uint16_t height = getUInt16(value, "height", name.c_str(), 0);
-                const double pixelRatio = getDouble(value, "pixelRatio", name.c_str(), 1);
-                const bool sdf = getBoolean(value, "sdf", name.c_str(), false);
-                style::ImageStretches stretchX = getStretches(value, "stretchX", name.c_str());
-                style::ImageStretches stretchY = getStretches(value, "stretchY", name.c_str());
-                optional<style::ImageContent> content = getContent(value, "content", name.c_str());
+    const auto& properties = doc.GetObject();
+    std::vector<Immutable<style::Image::Impl>> images;
+    images.reserve(properties.MemberCount());
+    for (const auto& property : properties) {
+        const std::string name = {property.name.GetString(), property.name.GetStringLength()};
+        const JSValue& value = property.value;
 
-                auto image = createStyleImage(name,
-                                              raster,
-                                              x,
-                                              y,
-                                              width,
-                                              height,
-                                              pixelRatio,
-                                              sdf,
-                                              std::move(stretchX),
-                                              std::move(stretchY),
-                                              std::move(content));
-                if (image) {
-                    images.push_back(std::move(image));
-                }
+        if (value.IsObject()) {
+            const uint16_t x = getUInt16(value, "x", name.c_str(), 0);
+            const uint16_t y = getUInt16(value, "y", name.c_str(), 0);
+            const uint16_t width = getUInt16(value, "width", name.c_str(), 0);
+            const uint16_t height = getUInt16(value, "height", name.c_str(), 0);
+            const double pixelRatio = getDouble(value, "pixelRatio", name.c_str(), 1);
+            const bool sdf = getBoolean(value, "sdf", name.c_str(), false);
+            style::ImageStretches stretchX = getStretches(value, "stretchX", name.c_str());
+            style::ImageStretches stretchY = getStretches(value, "stretchY", name.c_str());
+            optional<style::ImageContent> content = getContent(value, "content", name.c_str());
+
+            auto image = createStyleImage(
+                name, raster, x, y, width, height, pixelRatio, sdf, std::move(stretchX), std::move(stretchY), content);
+            if (image) {
+                images.push_back(std::move(image->baseImpl));
             }
         }
-        return images;
     }
+
+    assert([&images] {
+        std::sort(images.begin(), images.end());
+        return std::unique(images.begin(), images.end()) == images.end();
+    }());
+    return images;
 }
 
 } // namespace mbgl

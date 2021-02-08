@@ -20,6 +20,8 @@ public:
     void forward(const Resource&, const Response&, std::function<void()> callback) override;
     bool canRequest(const Resource&) const override;
     void setProperty(const std::string&, const mapbox::base::Value&) override;
+    void pause() override;
+    void resume() override;
 
     // Methods common to Ambient cache and Offline functionality
 
@@ -150,19 +152,19 @@ public:
     /*
      * Update an offline region metadata in the database.
      */
-    virtual void updateOfflineMetadata(const int64_t regionID,
+    virtual void updateOfflineMetadata(int64_t regionID,
                                        const OfflineRegionMetadata& metadata,
                                        std::function<void(expected<OfflineRegionMetadata, std::exception_ptr>)>);
 
     /*
      * Register an observer to be notified when the state of the region changes.
      */
-    virtual void setOfflineRegionObserver(OfflineRegion&, std::unique_ptr<OfflineRegionObserver>);
+    virtual void setOfflineRegionObserver(const OfflineRegion&, std::unique_ptr<OfflineRegionObserver>);
 
     /*
      * Pause or resume downloading of regional resources.
      */
-    virtual void setOfflineRegionDownloadState(OfflineRegion&, OfflineRegionDownloadState);
+    virtual void setOfflineRegionDownloadState(const OfflineRegion&, OfflineRegionDownloadState);
 
     /*
      * Retrieve the current status of the region. The query will be executed
@@ -170,7 +172,7 @@ public:
      * executed on the database thread; it is the responsibility of the SDK bindings
      * to re-execute a user-provided callback on the main thread.
      */
-    virtual void getOfflineRegionStatus(OfflineRegion&,
+    virtual void getOfflineRegionStatus(const OfflineRegion&,
                                         std::function<void(expected<OfflineRegionStatus, std::exception_ptr>)>) const;
 
     /*
@@ -214,7 +216,7 @@ public:
      * executed on the database thread; it is the responsibility of the SDK bindings
      * to re-execute a user-provided callback on the main thread.
      */
-    virtual void deleteOfflineRegion(OfflineRegion, std::function<void(std::exception_ptr)>);
+    virtual void deleteOfflineRegion(const OfflineRegion&, std::function<void(std::exception_ptr)>);
 
     /*
      * Invalidate all the tiles from an offline region forcing Mapbox GL to revalidate
@@ -222,7 +224,7 @@ public:
      * offline region and downloading it again because if the data on the cache matches
      * the server, no new data gets transmitted.
      */
-    virtual void invalidateOfflineRegion(OfflineRegion&, std::function<void(std::exception_ptr)>);
+    virtual void invalidateOfflineRegion(const OfflineRegion&, std::function<void(std::exception_ptr)>);
 
     /*
      * Changing or bypassing this limit without permission from Mapbox is prohibited

@@ -20,8 +20,9 @@ public:
     virtual void createBucket(const ImagePositions&,
                               std::unique_ptr<FeatureIndex>&,
                               std::unordered_map<std::string, LayerRenderData>&,
-                              const bool,
-                              const bool) = 0;
+                              bool,
+                              bool,
+                              const CanonicalTileID&) = 0;
 
     virtual void prepareSymbols(const GlyphMap&, const GlyphPositions&, const ImageMap&, const ImagePositions&){};
 

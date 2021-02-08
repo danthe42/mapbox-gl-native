@@ -1,8 +1,9 @@
 #pragma once
 
+#include <mbgl/storage/resource_transform.hpp>
 #include <mbgl/storage/response.hpp>
 
-#include <mapbox/value.hpp>
+#include <mapbox/compatibility/value.hpp>
 
 #include <functional>
 #include <memory>
@@ -47,7 +48,9 @@ public:
     // Allows to forward response from one source to another.
     // Optionally, callback can be provided to receive notification for forward
     // operation.
-    virtual void forward(const Resource&, const Response&, std::function<void()> = {}) {}
+    //
+    // NOLINTNEXTLINE(performance-unnecessary-value-param)
+    virtual void forward(const Resource&, const Response&, std::function<void()>) {}
 
     // When a file source supports consulting a local cache only, it must return true.
     // Cache-only requests are requests that aren't as urgent, but could be useful, e.g.
@@ -80,8 +83,31 @@ public:
     virtual void setProperty(const std::string&, const mapbox::base::Value&){};
     virtual mapbox::base::Value getProperty(const std::string&) const { return {}; };
 
+    // When supported, sets the modifier of the requested resources.
+    virtual void setResourceTransform(ResourceTransform) {} // NOLINT(performance-unnecessary-value-param)
+
 protected:
     FileSource() = default;
 };
+
+// Properties that may be supported by online file sources:
+
+// Property name to set / get an access token.
+// type: std::string
+constexpr const char* ACCESS_TOKEN_KEY = "access-token";
+
+// Property name to set / get base url.
+// type: std::string
+constexpr const char* API_BASE_URL_KEY = "api-base-url";
+
+// Property name to set / get maximum number of concurrent requests.
+// type: unsigned
+constexpr const char* MAX_CONCURRENT_REQUESTS_KEY = "max-concurrent-requests";
+
+// Properties that may be supported by database file sources:
+
+// Property to set database mode. When set, database opens in read-only mode; database opens in read-write-create mode
+// otherwise. type: bool
+constexpr const char* READ_ONLY_MODE_KEY = "read-only-mode";
 
 } // namespace mbgl
